@@ -1,3 +1,6 @@
+# This workflow tries to create a Git tag for the version in pyproject.tom
+# If the tag already exists, it's left alone.
+
 name: Create a Git Tag for version in pyproject.toml
 
 # Controls when the workflow will run
