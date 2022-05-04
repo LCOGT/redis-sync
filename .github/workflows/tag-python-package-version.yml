@@ -43,11 +43,17 @@ jobs:
           script: |
             const { PKG_VERSION } = process.env
             
-            resp = await github.rest.git.createRef({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              ref: `refs/tags/v${PKG_VERSION}`,
-              sha: context.sha
-            })
-            
-            console.log(resp)
+            try {
+              await github.rest.git.createRef({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                ref: `refs/tags/v${PKG_VERSION}`,
+                sha: context.sha
+              })
+            } catch (e) {
+              if (e.status === 422 && e.data.message === "Reference already exists") {
+                console.log("Tag already exists")
+              } else {
+                throw e
+              }
+            }
