@@ -43,9 +43,11 @@ jobs:
           script: |
             const { PKG_VERSION } = process.env
             
-            github.rest.git.createRef({
+            resp = await github.rest.git.createRef({
               owner: context.repo.owner,
               repo: context.repo.repo,
               ref: `refs/tags/v${PKG_VERSION}`,
               sha: context.sha
             })
+            
+            console.log(resp)
