@@ -51,7 +51,7 @@ jobs:
                 sha: context.sha
               })
             } catch (e) {
-              if (e.status === 422 && e.data.message === "Reference already exists") {
+              if (e.status === 422 && e.response.data.message === "Reference already exists") {
                 console.log("Tag already exists")
               } else {
                 throw e
