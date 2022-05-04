@@ -37,5 +37,15 @@ jobs:
         
       - name: Create a Git Tag
         uses: actions/github-script@v6
+        env:
+          PKG_VERSION: ${{ steps.vars.outputs.pkg_version }}
         with:
-          script: console.log(context)
+          script: |
+            const { PKG_VERSION } = process.env
+            
+            github.rest.git.createRef({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              ref: `refs/tags/v${PKG_VERSION}`,
+              sha: context.sha
+            })
