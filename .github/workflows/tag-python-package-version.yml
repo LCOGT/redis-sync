@@ -37,12 +37,20 @@ jobs:
       - name: Collect Package Version
         id: vars
         run: echo ::set-output name=pkg_version::$(poetry version -s)
+      
+      - name: Get LCO Bot Token
+        id: botauth
+        uses: getsentry/action-github-app-token@v1
+        with:
+          app_id: ${{ secrets.LCO_BOT_APP_ID }}
+          private_key: ${{ secrets.LCO_BOT_APP_PRIVATE_KEY }}
         
       - name: Create a Git Tag
         uses: actions/github-script@v6
         env:
           PKG_VERSION: ${{ steps.vars.outputs.pkg_version }}
         with:
+          github-token: ${{ steps.botauth.outputs.token }}
           script: |
             const { PKG_VERSION } = process.env
             
