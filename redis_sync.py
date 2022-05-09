@@ -23,6 +23,7 @@ from collections.abc import AsyncIterator
 @click.option("--parallel",
     type=click.IntRange(1, 1000),
     default=10,
+    show_default=True,
     help="number keys to copy in parallel"
 )
 @click.option("--dst-replace/--dst-no-replace",
