@@ -31,6 +31,11 @@ from collections.abc import AsyncIterator
     show_default=True,
     help="whether to replace the key on DST if it already exists"
 )
+@click.option("--dst-flushdb/--dst-no-flushdb",
+    default=False,
+    show_default=True,
+    help="whether to remove all keys on DST (issues a FLUSHDB !!!)"
+)
 def cli(*args, **kwargs) -> None:
     """Copy keys (and TTL metadata) from one Redis to another."""
     asyncio.run(copy(*args, **kwargs))
@@ -42,6 +47,7 @@ async def copy(
     parallel: int,
     match_keys: str | None,
     dst_replace: bool,
+    dst_flushdb: bool,
 ) -> None:
     src = redis.asyncio.from_url(src_url)
     await src.ping()
@@ -51,12 +57,20 @@ async def copy(
     await dst.ping()
     click.echo(f"Connected to DST")
 
-    async for keys in scan_iter_batch(src, match=match_keys, count=parallel):
-        tasks = [copy_one(k, src, dst, dst_replace) for k in keys]
-        await asyncio.gather(*tasks)
+    try:
+        if dst_flushdb:
+            click.secho("Flushing DB on DST", fg="red")
+            click.confirm("Do you want to continue?", abort=True)
+            await dst.flushdb()
 
-    await src.close()
-    await dst.close()
+        async for keys in scan_iter_batch(src, match=match_keys, count=parallel):
+            tasks = [copy_one(k, src, dst, dst_replace) for k in keys]
+            await asyncio.gather(*tasks)
+    finally:
+        await src.close()
+        await src.connection_pool.disconnect()
+        await dst.close()
+        await dst.connection_pool.disconnect()
     click.echo("Done")
 
 
