@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "redis-sync"
-version = "0.1.4"
+version = "0.1.5"
 description = "Simple tool to copy keys between Redis servers"
 authors = ["Jashandeep Sohi <jsohi@lco.global>"]
 readme = "README.rst"
