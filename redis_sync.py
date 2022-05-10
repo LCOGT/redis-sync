@@ -98,8 +98,12 @@ async def scan_iter_batch(
 ) -> AsyncIterator:
     i = 0
     cursor = "0"
+    prefetch = asyncio.create_task(r.scan(cursor=cursor, **kwargs))
     while cursor != 0:
-        cursor, keys = await r.scan(cursor=cursor, **kwargs)
+        cursor, keys = await prefetch
+        if cursor != 0:
+            prefetch = asyncio.create_task(r.scan(cursor=cursor, **kwargs))
+
         yield i, keys
         i = i + 1
 
