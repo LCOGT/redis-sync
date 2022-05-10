@@ -41,6 +41,11 @@ from collections.abc import AsyncIterator
     show_default=True,
     help="try to be silent"
 )
+@click.option("--prompts/--no-prompts",
+    default=True,
+    show_default=True,
+    help="enable/disable prompts"
+)
 def cli(*args, **kwargs) -> None:
     """Copy keys (and TTL metadata) from one Redis to another."""
     asyncio.run(copy(*args, **kwargs))
@@ -54,6 +59,7 @@ async def copy(
     dst_replace: bool,
     dst_flushdb: bool,
     silent: bool,
+    prompts: bool,
 ) -> None:
     src = redis.asyncio.from_url(src_url)
     await src.ping()
@@ -66,7 +72,8 @@ async def copy(
     try:
         if dst_flushdb:
             click.secho("Flushing DB on DST", fg="red")
-            click.confirm("Do you want to continue?", abort=True)
+            if prompts:
+                click.confirm("Do you want to continue?", abort=True)
             await dst.flushdb()
 
         key_count = 0
