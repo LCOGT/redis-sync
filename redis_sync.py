@@ -36,6 +36,11 @@ from collections.abc import AsyncIterator
     show_default=True,
     help="whether to remove all keys on DST (issues a FLUSHDB !!!)"
 )
+@click.option("--silent/--no-silent",
+    default=False,
+    show_default=True,
+    help="try to be silent"
+)
 def cli(*args, **kwargs) -> None:
     """Copy keys (and TTL metadata) from one Redis to another."""
     asyncio.run(copy(*args, **kwargs))
@@ -48,6 +53,7 @@ async def copy(
     match_keys: str | None,
     dst_replace: bool,
     dst_flushdb: bool,
+    silent: bool,
 ) -> None:
     src = redis.asyncio.from_url(src_url)
     await src.ping()
@@ -63,9 +69,14 @@ async def copy(
             click.confirm("Do you want to continue?", abort=True)
             await dst.flushdb()
 
-        async for keys in scan_iter_batch(src, match=match_keys, count=parallel):
-            tasks = [copy_one(k, src, dst, dst_replace) for k in keys]
+        key_count = 0
+        async for (i, keys) in scan_iter_batch(src, match=match_keys, count=parallel):
+            tasks = [copy_one(k, src, dst, dst_replace, silent) for k in keys]
             await asyncio.gather(*tasks)
+            key_count = key_count + len(keys)
+
+            if silent:
+                click.echo("copied batch %s (total keys: %s)" % (i+1, key_count))
     finally:
         await src.close()
         await src.connection_pool.disconnect()
@@ -78,10 +89,12 @@ async def scan_iter_batch(
     r: redis.asyncio.Redis,
     **kwargs
 ) -> AsyncIterator:
+    i = 0
     cursor = "0"
     while cursor != 0:
         cursor, keys = await r.scan(cursor=cursor, **kwargs)
-        yield keys
+        yield i, keys
+        i = i + 1
 
 
 async def copy_one(
@@ -89,6 +102,7 @@ async def copy_one(
     src: redis.asyncio.Redis,
     dst: redis.asyncio.Redis,
     replace: bool,
+    silent: bool,
 ) -> None:
     src_dump = await src.dump(key)
     await dst.restore(key, 0, src_dump, replace=replace)
@@ -98,6 +112,7 @@ async def copy_one(
     if src_ttl > 0:
         await dst.pexpire(key, src_ttl)
 
-    key_fmt = key.decode("unicode_escape")
-    ttl_fmt = f"{src_ttl} ms" if src_ttl > 0 else "n/a"
-    click.echo(f"Copied key '{key_fmt}' (TTL: {ttl_fmt})")
+    if not silent:
+        key_fmt = key.decode("unicode_escape")
+        ttl_fmt = f"{src_ttl} ms" if src_ttl > 0 else "n/a"
+        click.echo(f"Copied key '{key_fmt}' (TTL: {ttl_fmt})")
