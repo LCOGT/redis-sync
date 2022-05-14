@@ -3,7 +3,10 @@ import asyncio
 import click
 import redis.asyncio
 
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator, AsyncIterable, AsyncIterator
+
+from aiostream import stream
+from tqdm.asyncio import tqdm
 
 
 @click.command()
@@ -26,6 +29,12 @@ from collections.abc import AsyncIterator
     show_default=True,
     help="number keys to copy in parallel"
 )
+@click.option("--progress-interval",
+    type=click.FloatRange(0.5, 60),
+    default=1,
+    show_default=True,
+    help="minimum time interval between progress updates"
+)
 @click.option("--dst-replace/--dst-no-replace",
     default=True,
     show_default=True,
@@ -36,10 +45,10 @@ from collections.abc import AsyncIterator
     show_default=True,
     help="whether to remove all keys on DST (issues a FLUSHDB !!!)"
 )
-@click.option("--silent/--no-silent",
+@click.option("--verbose/--no-verbose",
     default=False,
     show_default=True,
-    help="try to be silent"
+    help="spam stdout"
 )
 @click.option("--prompts/--no-prompts",
     default=True,
@@ -58,8 +67,9 @@ async def copy(
     match_keys: str | None,
     dst_replace: bool,
     dst_flushdb: bool,
-    silent: bool,
+    verbose: bool,
     prompts: bool,
+    progress_interval: float,
 ) -> None:
     src = redis.asyncio.from_url(src_url)
     await src.ping()
@@ -76,14 +86,21 @@ async def copy(
                 click.confirm("Do you want to continue?", abort=True)
             await dst.flushdb()
 
-        key_count = 0
-        async for (i, keys) in scan_iter_batch(src, match=match_keys, count=parallel):
-            tasks = [copy_one(k, src, dst, dst_replace, silent) for k in keys]
-            await asyncio.gather(*tasks)
-            key_count = key_count + len(keys)
+        keys = ScanIter(src, match=match_keys, count=parallel)
 
-            if silent:
-                click.echo("copied batch %s (total keys: %s)" % (i+1, key_count))
+        copiers = [copier(keys, src, dst, dst_replace) for _ in range(parallel)]
+
+        pbar = tqdm(desc="Copied", mininterval=progress_interval, unit=" keys")
+
+        async with stream.merge(*copiers).stream() as s:
+            async for key, ttl in s:
+                pbar.update()
+                if verbose:
+                    key_fmt = key.decode("unicode_escape")
+                    ttl_fmt = f"{ttl} ms" if ttl > 0 else "n/a"
+                    pbar.write(f"Copied key '{key_fmt}' (TTL: {ttl_fmt})")
+
+        pbar.close()
     finally:
         await src.close()
         await src.connection_pool.disconnect()
@@ -92,20 +109,15 @@ async def copy(
     click.echo("Done")
 
 
-async def scan_iter_batch(
-    r: redis.asyncio.Redis,
-    **kwargs
-) -> AsyncIterator:
-    i = 0
-    cursor = "0"
-    prefetch = asyncio.create_task(r.scan(cursor=cursor, **kwargs))
-    while cursor != 0:
-        cursor, keys = await prefetch
-        if cursor != 0:
-            prefetch = asyncio.create_task(r.scan(cursor=cursor, **kwargs))
-
-        yield i, keys
-        i = i + 1
+async def copier(
+    keys: "ScanIter",
+    src: redis.asyncio.Redis,
+    dst: redis.asyncio.Redis,
+    replace: bool,
+) -> AsyncGenerator[tuple[bytes, int], None]:
+    async for key in keys:
+        ttl = await copy_one(key, src, dst, replace)
+        yield key, ttl
 
 
 async def copy_one(
@@ -113,8 +125,7 @@ async def copy_one(
     src: redis.asyncio.Redis,
     dst: redis.asyncio.Redis,
     replace: bool,
-    silent: bool,
-) -> None:
+) -> int:
     src_dump = await src.dump(key)
     await dst.restore(key, 0, src_dump, replace=replace)
 
@@ -123,7 +134,37 @@ async def copy_one(
     if src_ttl > 0:
         await dst.pexpire(key, src_ttl)
 
-    if not silent:
-        key_fmt = key.decode("unicode_escape")
-        ttl_fmt = f"{src_ttl} ms" if src_ttl > 0 else "n/a"
-        click.echo(f"Copied key '{key_fmt}' (TTL: {ttl_fmt})")
+    return src_ttl
+
+
+class ScanIter(AsyncIterator):
+
+    def __init__(
+        self,
+        r: redis.asyncio.Redis,
+        **kwargs
+    ):
+        self._r = r
+        self._kwargs = kwargs
+        self._cursor = "0"
+        self._buffer = []
+
+    def __aiter__(self):
+        return self
+
+    async def _next_buffer(self) -> list[bytes]:
+        if self._cursor == 0:
+            raise StopAsyncIteration()
+
+        self._cursor, keys = await self._r.scan(
+            cursor=self._cursor,
+            **self._kwargs,
+        )
+
+        return keys
+
+    async def __anext__(self) -> bytes:
+        while not self._buffer:
+            self._buffer = await self._next_buffer()
+
+        return self._buffer.pop()
