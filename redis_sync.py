@@ -1,10 +1,11 @@
 import asyncio
 import hashlib
+import functools
 
 import click
 import redis.asyncio
 
-from collections.abc import AsyncGenerator, AsyncIterable, AsyncIterator
+from collections.abc import AsyncGenerator, AsyncIterator
 
 from aiostream import stream
 from tqdm.asyncio import tqdm
@@ -93,7 +94,11 @@ async def copy(
                 click.confirm("Do you want to continue?", abort=True)
             await dst.flushdb()
 
-        keys = ScanIter(src, match=match_keys, count=parallel)
+        keys = ScanIter(
+            src,
+            match=match_keys,
+            count=parallel,
+        )
 
         copiers = [copier(keys, src, dst, dst_replace) for _ in range(parallel)]
 
@@ -154,27 +159,37 @@ class ScanIter(AsyncIterator):
         r: redis.asyncio.Redis,
         **kwargs
     ):
-        self._r = r
-        self._kwargs = kwargs
-        self._cursor = "0"
-        self._buffer = []
+        self._scan_iter = functools.partial(r.scan_iter, **kwargs)
+        self._q = asyncio.Queue(maxsize=kwargs.get("count", 100) * 2)
+        self._feed_task = None
 
     def __aiter__(self):
+        if self._feed_task is None:
+            self._feed_task = asyncio.create_task(self._feed())
+
         return self
 
-    async def _next_buffer(self) -> list[bytes]:
-        if self._cursor == 0:
-            raise StopAsyncIteration()
+    async def _feed(self):
+        async for k in self._scan_iter():
+            await self._q.put(k)
 
-        self._cursor, keys = await self._r.scan(
-            cursor=self._cursor,
-            **self._kwargs,
-        )
-
-        return keys
+        await self._q.join()
 
     async def __anext__(self) -> bytes:
-        while not self._buffer:
-            self._buffer = await self._next_buffer()
+        if not self._feed_task or self._feed_task.done():
+            raise StopAsyncIteration()
 
-        return self._buffer.pop()
+        q_get = asyncio.create_task(self._q.get())
+        done, _ = await asyncio.wait(
+            (q_get, self._feed_task),
+            return_when=asyncio.FIRST_COMPLETED
+        )
+
+        if q_get in done:
+            item = await q_get
+            self._q.task_done()
+            return item
+
+        q_get.cancel()
+
+        raise StopAsyncIteration()
