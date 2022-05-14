@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 
 import click
 import redis.asyncio
@@ -50,6 +51,11 @@ from tqdm.asyncio import tqdm
     show_default=True,
     help="spam stdout"
 )
+@click.option("--verbose-hash-key/--no-verbose-hash-key",
+    default=False,
+    show_default=True,
+    help="print the hash of the key instead of the key itself"
+)
 @click.option("--prompts/--no-prompts",
     default=True,
     show_default=True,
@@ -70,6 +76,7 @@ async def copy(
     verbose: bool,
     prompts: bool,
     progress_interval: float,
+    verbose_hash_key: bool,
 ) -> None:
     src = redis.asyncio.from_url(src_url)
     await src.ping()
@@ -96,7 +103,10 @@ async def copy(
             async for key, ttl in s:
                 pbar.update()
                 if verbose:
-                    key_fmt = key.decode("unicode_escape")
+                    if verbose_hash_key:
+                        key_fmt = "sha1: %s" % hashlib.sha1(key).hexdigest()
+                    else:
+                        key_fmt = key.decode("unicode_escape")
                     ttl_fmt = f"{ttl} ms" if ttl > 0 else "n/a"
                     pbar.write(f"Copied key '{key_fmt}' (TTL: {ttl_fmt})")
 
